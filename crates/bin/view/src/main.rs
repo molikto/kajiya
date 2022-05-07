@@ -186,7 +186,7 @@ fn main() -> anyhow::Result<()> {
             (Vec3::new(0.0, 1.0, 8.0), Quat::IDENTITY)
         };
 
-        CameraRig::builder()
+        CameraRig::<RightHanded>::builder()
             .with(Position::new(position))
             .with(YawPitch::new().rotation_quat(rotation))
             .with(Smooth::default())
