@@ -31,16 +31,6 @@ pub struct Queue {
     pub family: QueueFamily,
 }
 
-pub trait DeferredRelease: Copy {
-    fn enqueue_release(self, pending: &mut PendingResourceReleases);
-}
-
-impl DeferredRelease for vk::DescriptorPool {
-    fn enqueue_release(self, pending: &mut PendingResourceReleases) {
-        pending.descriptor_pools.push(self);
-    }
-}
-
 #[derive(Default)]
 pub struct PendingResourceReleases {
     pub descriptor_pools: Vec<vk::DescriptorPool>,
@@ -56,6 +46,16 @@ impl PendingResourceReleases {
     }
 }
 
+pub trait DeferredRelease: Copy {
+    fn enqueue_release(self, pending: &mut PendingResourceReleases);
+}
+
+impl DeferredRelease for vk::DescriptorPool {
+    fn enqueue_release(self, pending: &mut PendingResourceReleases) {
+        pending.descriptor_pools.push(self);
+    }
+}
+
 pub struct DeviceFrame {
     //pub(crate) linear_allocator_pool: vk_mem::AllocatorPool,
     pub swapchain_acquired_semaphore: Option<vk::Semaphore>,
@@ -64,6 +64,30 @@ pub struct DeviceFrame {
     pub presentation_command_buffer: CommandBuffer,
     pub pending_resource_releases: Mutex<PendingResourceReleases>,
     pub profiler_data: VkProfilerData,
+}
+
+impl DeviceFrame {
+    pub fn new(
+        device: &ash::Device,
+        global_allocator: &mut VulkanAllocator,
+        queue_family: &QueueFamily,
+    ) -> Self {
+        Self {
+            /*linear_allocator_pool: global_allocator
+            .create_pool(&{
+                let mut info = vk_mem::AllocatorPoolCreateInfo::default();
+                info.flags = vk_mem::AllocatorPoolCreateFlags::LINEAR_ALGORITHM;
+                info
+            })
+            .expect("linear allocator"),*/
+            swapchain_acquired_semaphore: None,
+            rendering_complete_semaphore: None,
+            main_command_buffer: CommandBuffer::new(device, queue_family).unwrap(),
+            presentation_command_buffer: CommandBuffer::new(device, queue_family).unwrap(),
+            pending_resource_releases: Default::default(),
+            profiler_data: VkProfilerData::new(device, global_allocator),
+        }
+    }
 }
 
 pub struct CommandBuffer {
@@ -105,30 +129,6 @@ impl CommandBuffer {
             //pool,
             submit_done_fence,
         })
-    }
-}
-
-impl DeviceFrame {
-    pub fn new(
-        device: &ash::Device,
-        global_allocator: &mut VulkanAllocator,
-        queue_family: &QueueFamily,
-    ) -> Self {
-        Self {
-            /*linear_allocator_pool: global_allocator
-            .create_pool(&{
-                let mut info = vk_mem::AllocatorPoolCreateInfo::default();
-                info.flags = vk_mem::AllocatorPoolCreateFlags::LINEAR_ALGORITHM;
-                info
-            })
-            .expect("linear allocator"),*/
-            swapchain_acquired_semaphore: None,
-            rendering_complete_semaphore: None,
-            main_command_buffer: CommandBuffer::new(device, queue_family).unwrap(),
-            presentation_command_buffer: CommandBuffer::new(device, queue_family).unwrap(),
-            pending_resource_releases: Default::default(),
-            profiler_data: VkProfilerData::new(device, global_allocator),
-        }
     }
 }
 
