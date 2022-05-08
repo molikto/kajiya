@@ -5,11 +5,16 @@ use std::{
 
 use anyhow::Context;
 
-use kajiya_backend::{vk_sync::AccessType, Device, Image, ImageDesc};
+use kajiya_backend::{
+    vk_sync::{self, AccessType},
+    Device, Image, ImageDesc,
+};
+
+use crate::ImportExportToRenderGraph;
 
 use super::{
-    Buffer, BufferDesc, ExportableGraphResource, ExportedHandle, Handle, RenderGraph, Resource,
-    ResourceDesc, RetiredRenderGraph, TypeEquals,
+    Buffer, BufferDesc, ExportedHandle, Handle, RenderGraph, Resource, ResourceDesc,
+    RetiredRenderGraph, TypeEquals,
 };
 
 pub struct ReadOnlyHandle<ResType: Resource>(Handle<ResType>);
@@ -43,61 +48,82 @@ impl<'a> From<String> for TemporalResourceKey {
     }
 }
 
-#[derive(Clone)]
-pub(crate) enum TemporalResource {
-    Image(Arc<Image>),
-    Buffer(Arc<Buffer>),
-}
-
-pub(crate) enum ExportedResourceHandle {
-    Image(ExportedHandle<Image>),
-    Buffer(ExportedHandle<Buffer>),
-}
-
-pub(crate) enum TemporalResourceState {
+pub(crate) enum TemporalResourceState<Res: Resource> {
     Inert {
-        resource: TemporalResource,
+        resource: Arc<Res>,
         access_type: AccessType,
     },
     Imported {
-        resource: TemporalResource,
-        handle: ExportableGraphResource,
+        resource: Arc<Res>,
+        handle: Handle<Res>,
     },
     Exported {
-        resource: TemporalResource,
-        handle: ExportedResourceHandle,
+        resource: Arc<Res>,
+        handle: ExportedHandle<Res>,
     },
 }
+
+type ResMap<Res> = HashMap<TemporalResourceKey, TemporalResourceState<Res>>;
 
 #[derive(Default)]
 pub struct TemporalRenderGraphState {
-    pub(crate) resources: HashMap<TemporalResourceKey, TemporalResourceState>,
+    images: ResMap<Image>,
+    buffers: ResMap<Buffer>,
 }
 
 impl TemporalRenderGraphState {
+    fn clone_assuming_inert_resources<Res: Resource>(resources: &ResMap<Res>) -> ResMap<Res> {
+        resources
+            .iter()
+            .map(|(k, v)| match v {
+                TemporalResourceState::Inert {
+                    resource,
+                    access_type,
+                } => (
+                    k.clone(),
+                    TemporalResourceState::Inert {
+                        resource: resource.clone(),
+                        access_type: *access_type,
+                    },
+                ),
+                TemporalResourceState::Imported { .. } | TemporalResourceState::Exported { .. } => {
+                    panic!("Not in inert state!")
+                }
+            })
+            .collect()
+    }
     pub(crate) fn clone_assuming_inert(&self) -> Self {
         Self {
-            resources: self
-                .resources
-                .iter()
-                .map(|(k, v)| match v {
-                    TemporalResourceState::Inert {
-                        resource,
-                        access_type,
-                    } => (
-                        k.clone(),
-                        TemporalResourceState::Inert {
-                            resource: resource.clone(),
-                            access_type: *access_type,
-                        },
-                    ),
-                    TemporalResourceState::Imported { .. }
-                    | TemporalResourceState::Exported { .. } => {
-                        panic!("Not in inert state!")
-                    }
-                })
-                .collect(),
+            images: Self::clone_assuming_inert_resources(&self.images),
+            buffers: Self::clone_assuming_inert_resources(&self.buffers),
         }
+    }
+
+    fn reuse_from_resources<Res: Resource>(self_map: &mut ResMap<Res>, other: ResMap<Res>) {
+        for (res_key, res) in other {
+            // `insert` is infrequent here, and we can avoid cloning the key.
+            #[allow(clippy::map_entry)]
+            if !self_map.contains_key(&res_key) {
+                let res = match res {
+                    res @ TemporalResourceState::Inert { .. } => res,
+                    TemporalResourceState::Imported { resource, .. }
+                    | TemporalResourceState::Exported { resource, .. } => {
+                        TemporalResourceState::Inert {
+                            resource,
+                            access_type: vk_sync::AccessType::Nothing,
+                        }
+                    }
+                };
+
+                self_map.insert(res_key, res);
+            }
+        }
+    }
+
+    pub(crate) fn reuse_from(&mut self, temporal_rg_state: TemporalRenderGraphState) {
+        let TemporalRenderGraphState { images, buffers } = temporal_rg_state;
+        Self::reuse_from_resources(&mut self.buffers, buffers);
+        Self::reuse_from_resources(&mut self.images, images);
     }
 }
 
@@ -157,7 +183,7 @@ impl GetOrCreateTemporal<ImageDesc> for TemporalRenderGraph {
     ) -> anyhow::Result<Handle<Image>> {
         let key = key.into();
 
-        match self.temporal_state.resources.entry(key.clone()) {
+        match self.temporal_state.images.entry(key.clone()) {
             hash_map::Entry::Occupied(mut entry) => {
                 let state = entry.get_mut();
 
@@ -167,27 +193,13 @@ impl GetOrCreateTemporal<ImageDesc> for TemporalRenderGraph {
                         access_type,
                     } => {
                         let resource = resource.clone();
+                        let handle = self.rg.import(resource.clone(), *access_type);
+                        *state = TemporalResourceState::Imported {
+                            resource,
+                            handle: handle.clone_unchecked(),
+                        };
 
-                        match &resource {
-                            TemporalResource::Image(image) => {
-                                let handle = self.rg.import(image.clone(), *access_type);
-
-                                *state = TemporalResourceState::Imported {
-                                    resource,
-                                    handle: ExportableGraphResource::Image(
-                                        handle.clone_unchecked(),
-                                    ),
-                                };
-
-                                Ok(handle)
-                            }
-                            TemporalResource::Buffer(_) => {
-                                anyhow::bail!(
-                                    "Resource {:?} is a buffer, but an image was requested",
-                                    key
-                                );
-                            }
-                        }
+                        Ok(handle)
                     }
                     TemporalResourceState::Imported { .. } => Err(anyhow::anyhow!(
                         "Temporal resource already taken: {:?}",
@@ -206,8 +218,8 @@ impl GetOrCreateTemporal<ImageDesc> for TemporalRenderGraph {
                 );
                 let handle = self.rg.import(resource.clone(), AccessType::Nothing);
                 entry.insert(TemporalResourceState::Imported {
-                    resource: TemporalResource::Image(resource),
-                    handle: ExportableGraphResource::Image(handle.clone_unchecked()),
+                    resource,
+                    handle: handle.clone_unchecked(),
                 });
                 Ok(handle)
             }
@@ -224,7 +236,7 @@ impl GetOrCreateTemporal<BufferDesc> for TemporalRenderGraph {
     ) -> anyhow::Result<Handle<Buffer>> {
         let key = key.into();
 
-        match self.temporal_state.resources.entry(key.clone()) {
+        match self.temporal_state.buffers.entry(key.clone()) {
             hash_map::Entry::Occupied(mut entry) => {
                 let state = entry.get_mut();
 
@@ -234,27 +246,14 @@ impl GetOrCreateTemporal<BufferDesc> for TemporalRenderGraph {
                         access_type,
                     } => {
                         let resource = resource.clone();
+                        let handle = self.rg.import(resource.clone(), *access_type);
 
-                        match &resource {
-                            TemporalResource::Buffer(buffer) => {
-                                let handle = self.rg.import(buffer.clone(), *access_type);
+                        *state = TemporalResourceState::Imported {
+                            resource,
+                            handle: handle.clone_unchecked(),
+                        };
 
-                                *state = TemporalResourceState::Imported {
-                                    resource,
-                                    handle: ExportableGraphResource::Buffer(
-                                        handle.clone_unchecked(),
-                                    ),
-                                };
-
-                                Ok(handle)
-                            }
-                            TemporalResource::Image(_) => {
-                                anyhow::bail!(
-                                    "Resource {:?} is an image, but a buffer was requested",
-                                    key
-                                );
-                            }
-                        }
+                        Ok(handle)
                     }
                     TemporalResourceState::Imported { .. } => Err(anyhow::anyhow!(
                         "Temporal resource already taken: {:?}",
@@ -269,8 +268,8 @@ impl GetOrCreateTemporal<BufferDesc> for TemporalRenderGraph {
                 let resource = Arc::new(self.device.create_buffer(desc, &key.0, None)?);
                 let handle = self.rg.import(resource.clone(), AccessType::Nothing);
                 entry.insert(TemporalResourceState::Imported {
-                    resource: TemporalResource::Buffer(resource),
-                    handle: ExportableGraphResource::Buffer(handle.clone_unchecked()),
+                    resource: resource,
+                    handle: handle.clone_unchecked(),
                 });
                 Ok(handle)
             }
@@ -279,46 +278,43 @@ impl GetOrCreateTemporal<BufferDesc> for TemporalRenderGraph {
 }
 
 impl TemporalRenderGraph {
-    pub fn export_temporal(self) -> (RenderGraph, ExportedTemporalRenderGraphState) {
-        let mut rg = self.rg;
-        let mut state = self.temporal_state;
-
-        for state in state.resources.values_mut() {
+    fn export_temporal_resources<Res: ImportExportToRenderGraph>(
+        rg: &mut RenderGraph,
+        resources: &mut ResMap<Res>,
+    ) {
+        for state in resources.values_mut() {
             match state {
                 TemporalResourceState::Inert { .. } => {
                     // Nothing to do here
                 }
-                TemporalResourceState::Imported { resource, handle } => match handle {
-                    ExportableGraphResource::Image(handle) => {
-                        let handle = rg.export(handle.clone_unchecked(), AccessType::Nothing);
-                        *state = TemporalResourceState::Exported {
-                            resource: resource.clone(),
-                            handle: ExportedResourceHandle::Image(handle),
-                        }
+                TemporalResourceState::Imported { resource, handle } => {
+                    let handle = rg.export(handle.clone_unchecked(), AccessType::Nothing);
+                    *state = TemporalResourceState::Exported {
+                        resource: resource.clone(),
+                        handle,
                     }
-                    ExportableGraphResource::Buffer(handle) => {
-                        let handle = rg.export(handle.clone_unchecked(), AccessType::Nothing);
-                        *state = TemporalResourceState::Exported {
-                            resource: resource.clone(),
-                            handle: ExportedResourceHandle::Buffer(handle),
-                        }
-                    }
-                },
+                }
                 TemporalResourceState::Exported { .. } => {
                     unreachable!()
                 }
             }
         }
-
+    }
+    pub fn export_temporal(self) -> (RenderGraph, ExportedTemporalRenderGraphState) {
+        let mut rg = self.rg;
+        let mut state = self.temporal_state;
+        Self::export_temporal_resources(&mut rg, &mut state.images);
+        Self::export_temporal_resources(&mut rg, &mut state.buffers);
         (rg, ExportedTemporalRenderGraphState(state))
     }
 }
 
 impl ExportedTemporalRenderGraphState {
-    pub fn retire_temporal(self, rg: &RetiredRenderGraph) -> TemporalRenderGraphState {
-        let mut state = self.0;
-
-        for state in state.resources.values_mut() {
+    fn retire_temporal_resources<Res: ImportExportToRenderGraph + Resource>(
+        rg: &RetiredRenderGraph,
+        resources: &mut ResMap<Res>,
+    ) {
+        for state in resources.values_mut() {
             match state {
                 TemporalResourceState::Inert { .. } => {
                     // Nothing to do here
@@ -326,23 +322,19 @@ impl ExportedTemporalRenderGraphState {
                 TemporalResourceState::Imported { .. } => {
                     unreachable!()
                 }
-                TemporalResourceState::Exported { resource, handle } => match handle {
-                    ExportedResourceHandle::Image(handle) => {
-                        *state = TemporalResourceState::Inert {
-                            resource: resource.clone(),
-                            access_type: rg.exported_resource(*handle).1,
-                        }
+                TemporalResourceState::Exported { resource, handle } => {
+                    *state = TemporalResourceState::Inert {
+                        resource: resource.clone(),
+                        access_type: rg.exported_resource(*handle).1,
                     }
-                    ExportedResourceHandle::Buffer(handle) => {
-                        *state = TemporalResourceState::Inert {
-                            resource: resource.clone(),
-                            access_type: rg.exported_resource(*handle).1,
-                        }
-                    }
-                },
+                }
             }
         }
-
+    }
+    pub fn retire_temporal(self, rg: &RetiredRenderGraph) -> TemporalRenderGraphState {
+        let mut state = self.0;
+        Self::retire_temporal_resources(rg, &mut state.images);
+        Self::retire_temporal_resources(rg, &mut state.buffers);
         state
     }
 }

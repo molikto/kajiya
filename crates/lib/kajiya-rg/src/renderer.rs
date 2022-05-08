@@ -1,7 +1,7 @@
 use crate::{
     CompiledRenderGraph, ExecutingRenderGraph, ExportedTemporalRenderGraphState,
     PredefinedDescriptorSet, RenderGraphExecutionParams, TemporalRenderGraph,
-    TemporalRenderGraphState, TemporalResourceState,
+    TemporalRenderGraphState, TemporalResourceState, TemporalResourceKey,
 };
 use kajiya_backend::{
     ash::vk,
@@ -472,24 +472,7 @@ impl Renderer {
                     TemporalRg::Exported(_) => unreachable!(),
                 };
 
-                for (res_key, res) in temporal_rg_state.0.resources {
-                    // `insert` is infrequent here, and we can avoid cloning the key.
-                    #[allow(clippy::map_entry)]
-                    if !self_temporal_rg_state.resources.contains_key(&res_key) {
-                        let res = match res {
-                            res @ TemporalResourceState::Inert { .. } => res,
-                            TemporalResourceState::Imported { resource, .. }
-                            | TemporalResourceState::Exported { resource, .. } => {
-                                TemporalResourceState::Inert {
-                                    resource,
-                                    access_type: vk_sync::AccessType::Nothing,
-                                }
-                            }
-                        };
-
-                        self_temporal_rg_state.resources.insert(res_key, res);
-                    }
-                }
+                self_temporal_rg_state.reuse_from(temporal_rg_state.0);
 
                 Err(err)
             }
