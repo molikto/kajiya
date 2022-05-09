@@ -1,8 +1,13 @@
 use crate::{
     frame_desc::WorldFrameDesc,
     renderers::{
-        deferred::light_gbuffer, motion_blur::motion_blur, raster_meshes::*,
-        reference::reference_path_trace, shadows::trace_sun_shadow_mask, GbufferDepth,
+        deferred::light_gbuffer,
+        motion_blur::motion_blur,
+        raster_meshes::*,
+        rt_raster_meshes::{rt_raster_meshes, RasterMeshesRtData},
+        reference::reference_path_trace,
+        shadows::trace_sun_shadow_mask,
+        GbufferDepth,
     },
     world_renderer::{RenderDebugMode, WorldRenderer},
 };
@@ -36,43 +41,77 @@ impl WorldRenderer {
         let convolved_sky_cube = crate::renderers::sky::convolve_cube(rg, &sky_cube);
 
         let (mut gbuffer_depth, velocity_img) = {
-            let mut gbuffer_depth = {
-                let normal = rg.create(ImageDesc::new_2d(
-                    vk::Format::A2R10G10B10_UNORM_PACK32,
-                    frame_desc.render_extent,
-                ));
-
-                let gbuffer = rg.create(ImageDesc::new_2d(
-                    vk::Format::R32G32B32A32_SFLOAT,
-                    frame_desc.render_extent,
-                ));
-
-                let mut depth_img = rg.create(ImageDesc::new_2d(
-                    vk::Format::D32_SFLOAT,
-                    frame_desc.render_extent,
-                ));
-                rg::imageops::clear_depth(rg, &mut depth_img);
-
-                GbufferDepth::new(normal, gbuffer, depth_img)
-            };
-
             let mut velocity_img = rg.create(ImageDesc::new_2d(
                 vk::Format::R16G16B16A16_SFLOAT,
                 frame_desc.render_extent,
             ));
 
-            raster_meshes(
-                rg,
-                self.raster_simple_render_pass.clone(),
-                &mut gbuffer_depth,
-                &mut velocity_img,
-                RasterMeshesData {
-                    meshes: self.meshes.as_slice(),
-                    instances: self.instances.as_slice(),
-                    vertex_buffer: self.vertex_buffer.lock().clone(),
-                    bindless_descriptor_set: self.bindless_descriptor_set,
-                },
-            );
+            let gbuffer_depth: GbufferDepth =  if frame_desc.use_rt_raster {
+                let mut gbuffer_depth = {
+                    // TODO(molikto): cannot use packed texture?
+                    let normal = rg.create(ImageDesc::new_2d(
+                        vk::Format::R32G32B32A32_SFLOAT,
+                        frame_desc.render_extent,
+                    ));
+
+                    let gbuffer = rg.create(ImageDesc::new_2d(
+                        vk::Format::R32G32B32A32_SFLOAT,
+                        frame_desc.render_extent,
+                    ));
+
+                    let mut depth_img = rg.create(ImageDesc::new_2d(
+                        vk::Format::R32_SFLOAT,
+                        frame_desc.render_extent,
+                    ));
+                    rg::imageops::clear_color(rg, &mut depth_img, [0.0, 0.0, 0.0, 0.0]);
+
+                    GbufferDepth::new(normal, gbuffer, depth_img)
+                };
+                rt_raster_meshes(
+                    rg,
+                    &mut gbuffer_depth,
+                    &mut velocity_img,
+                    tlas.as_ref().unwrap(),
+                    RasterMeshesRtData {
+                        instances: self.instances.as_slice(),
+                        bindless_descriptor_set: self.bindless_descriptor_set,
+                    },
+                );
+                gbuffer_depth
+            } else {
+                let mut gbuffer_depth = {
+                    let normal = rg.create(ImageDesc::new_2d(
+                        vk::Format::A2R10G10B10_UNORM_PACK32,
+                        frame_desc.render_extent,
+                    ));
+
+                    let gbuffer = rg.create(ImageDesc::new_2d(
+                        vk::Format::R32G32B32A32_SFLOAT,
+                        frame_desc.render_extent,
+                    ));
+
+                    let mut depth_img = rg.create(ImageDesc::new_2d(
+                        vk::Format::D32_SFLOAT,
+                        frame_desc.render_extent,
+                    ));
+                    rg::imageops::clear_depth(rg, &mut depth_img);
+
+                    GbufferDepth::new(normal, gbuffer, depth_img)
+                };
+                raster_meshes(
+                    rg,
+                    self.raster_simple_render_pass.clone(),
+                    &mut gbuffer_depth,
+                    &mut velocity_img,
+                    RasterMeshesData {
+                        meshes: self.meshes.as_slice(),
+                        instances: self.instances.as_slice(),
+                        vertex_buffer: self.vertex_buffer.lock().clone(),
+                        bindless_descriptor_set: self.bindless_descriptor_set,
+                    },
+                );
+                gbuffer_depth
+            };
 
             (gbuffer_depth, velocity_img)
         };

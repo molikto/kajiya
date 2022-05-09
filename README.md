@@ -114,6 +114,7 @@ cargo run --bin view --release -- --scene battle --width 1920 --height 1080 --no
 * Space - switch to reference path tracing
 * Backspace - reset view to previous saved state
 * G - show/hide the UI
+* B - toggle raster/rt gbuffer pass
 
 ### Resolution scaling
 

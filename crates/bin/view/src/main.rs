@@ -107,6 +107,7 @@ struct PersistedAppState {
     camera_smoothness: f32,
     #[serde(default = "default_sun_rotation_smoothness")]
     sun_rotation_smoothness: f32,
+    use_rt_raster: bool,
 }
 
 impl PersistedAppState {
@@ -272,6 +273,7 @@ fn main() -> anyhow::Result<()> {
             camera_speed: default_camera_speed(),
             camera_smoothness: default_camera_smoothness(),
             sun_rotation_smoothness: default_sun_rotation_smoothness(),
+            use_rt_raster: false,
         });
     {
         let state = &mut state;
@@ -463,6 +465,9 @@ fn main() -> anyhow::Result<()> {
 
             if keyboard.was_just_pressed(VirtualKeyCode::G) {
                 show_gui = !show_gui;
+            }
+            if keyboard.was_just_pressed(VirtualKeyCode::B) {
+                state.use_rt_raster = !state.use_rt_raster;
             }
 
             if keyboard.was_just_pressed(VirtualKeyCode::C) {
@@ -685,6 +690,7 @@ fn main() -> anyhow::Result<()> {
             };
 
             WorldFrameDesc {
+                use_rt_raster: state.use_rt_raster,
                 camera_matrices: camera
                     .final_transform
                     .into_position_rotation()

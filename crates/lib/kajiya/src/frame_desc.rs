@@ -3,6 +3,7 @@ use glam::Vec3;
 use rust_shaders_shared::camera::CameraMatrices;
 
 pub struct WorldFrameDesc {
+    pub use_rt_raster: bool,
     pub camera_matrices: CameraMatrices,
 
     /// Internal render resolution, before any upsampling
