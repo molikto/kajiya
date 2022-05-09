@@ -660,10 +660,9 @@ impl WorldRenderer {
 
             let blas = self
                 .device
-                .create_ray_tracing_bottom_acceleration(
-                    &RayTracingBottomAccelerationDesc {
-                        geometries: vec![RayTracingGeometryDesc {
-                            geometry_type: RayTracingGeometryType::Triangle,
+                .create_ray_tracing_triangle_bottom_acceleration(
+                    &RayTracingTriangleBottomAccelerationDesc {
+                        geometries: vec![RayTracingTriangleGeometryDesc {
                             vertex_buffer: vertex_buffer_da,
                             index_buffer: index_buffer_da,
                             vertex_format: vk::Format::R32G32B32_SFLOAT,

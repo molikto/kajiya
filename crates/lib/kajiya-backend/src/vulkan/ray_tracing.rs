@@ -15,12 +15,6 @@ use bytes::Bytes;
 use glam::Affine3A;
 use parking_lot::Mutex;
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum RayTracingGeometryType {
-    Triangle = 0,
-    BoundingBox = 1,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct RayTracingGeometryPart {
     pub index_count: usize,
@@ -29,8 +23,7 @@ pub struct RayTracingGeometryPart {
 }
 
 #[derive(Clone, Debug)]
-pub struct RayTracingGeometryDesc {
-    pub geometry_type: RayTracingGeometryType,
+pub struct RayTracingTriangleGeometryDesc {
     pub vertex_buffer: vk::DeviceAddress,
     pub index_buffer: vk::DeviceAddress,
     pub vertex_format: vk::Format,
@@ -52,8 +45,20 @@ pub struct RayTracingTopAccelerationDesc {
 }
 
 #[derive(Clone, Debug)]
-pub struct RayTracingBottomAccelerationDesc {
-    pub geometries: Vec<RayTracingGeometryDesc>,
+pub struct RayTracingTriangleBottomAccelerationDesc {
+    pub geometries: Vec<RayTracingTriangleGeometryDesc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RayTracingAabbGeometryDesc {
+    pub buffer: vk::DeviceAddress,
+    pub stride: vk::DeviceSize,
+    pub primitive_count: u32
+}
+
+#[derive(Clone, Debug)]
+pub struct RayTracingAabbBottomAccelerationDesc {
+    pub geometries: Vec<RayTracingAabbGeometryDesc>,
 }
 
 #[derive(Clone, Debug)]
@@ -93,9 +98,9 @@ impl Device {
         })
     }
 
-    pub fn create_ray_tracing_bottom_acceleration(
+    pub fn create_ray_tracing_aabb_bottom_acceleration(
         &self,
-        desc: &RayTracingBottomAccelerationDesc,
+        desc: &RayTracingAabbBottomAccelerationDesc,
         scratch_buffer: &RayTracingAccelerationScratchBuffer,
     ) -> Result<RayTracingAcceleration, BackendError> {
         //log::trace!("Creating ray tracing bottom acceleration: {:?}", desc);
@@ -105,6 +110,75 @@ impl Device {
             .iter()
             .map(
                 |desc| -> Result<ash::vk::AccelerationStructureGeometryKHR, BackendError> {
+                    let geometry = ash::vk::AccelerationStructureGeometryKHR::builder()
+                        .geometry_type(ash::vk::GeometryTypeKHR::AABBS)
+                        .geometry(ash::vk::AccelerationStructureGeometryDataKHR {
+                            aabbs: ash::vk::AccelerationStructureGeometryAabbsDataKHR::builder()
+                                .data(ash::vk::DeviceOrHostAddressConstKHR {
+                                    device_address: desc.buffer,
+                                })
+                                .stride(desc.stride)
+                                .build(),
+                        })
+                        .build();
+
+                    Ok(geometry)
+                },
+            )
+            .collect();
+        let geometries = geometries?;
+
+        let build_range_infos: Vec<ash::vk::AccelerationStructureBuildRangeInfoKHR> = desc
+            .geometries
+            .iter()
+            .map(|desc| {
+                ash::vk::AccelerationStructureBuildRangeInfoKHR::builder()
+                    .primitive_count(desc.primitive_count)
+                    .build()
+            })
+            .collect();
+
+        let geometry_info = ash::vk::AccelerationStructureBuildGeometryInfoKHR::builder()
+            .ty(ash::vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
+            .flags(ash::vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
+            .geometries(geometries.as_slice())
+            .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
+            .build();
+
+        let max_primitive_counts: Vec<_> = desc
+            .geometries
+            .iter()
+            .map(|desc| desc.primitive_count)
+            .collect();
+
+        // Create bottom-level acceleration structure
+
+        let preallocate_bytes = 0;
+        self.create_ray_tracing_acceleration(
+            vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
+            geometry_info,
+            &build_range_infos,
+            &max_primitive_counts,
+            preallocate_bytes,
+            scratch_buffer,
+        )
+    }
+
+    pub fn create_ray_tracing_triangle_bottom_acceleration(
+        &self,
+        desc: &RayTracingTriangleBottomAccelerationDesc,
+        scratch_buffer: &RayTracingAccelerationScratchBuffer,
+    ) -> Result<RayTracingAcceleration, BackendError> {
+        //log::trace!("Creating ray tracing bottom acceleration: {:?}", desc);
+
+        let geometries: Result<Vec<ash::vk::AccelerationStructureGeometryKHR>, BackendError> = desc
+            .geometries
+            .iter()
+            .map(
+                |desc| -> Result<ash::vk::AccelerationStructureGeometryKHR, BackendError> {
+                    if desc.parts.len() != 1 {
+                        panic!("Not supported yet.")
+                    }
                     let part: RayTracingGeometryPart = desc.parts[0];
 
                     let geometry = ash::vk::AccelerationStructureGeometryKHR::builder()
