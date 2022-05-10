@@ -461,7 +461,7 @@ fn main() -> anyhow::Result<()> {
             state.camera_position = camera.final_transform.position;
             state.camera_rotation = camera.final_transform.rotation;
 
-            if keyboard.was_just_pressed(VirtualKeyCode::Tab) {
+            if keyboard.was_just_pressed(VirtualKeyCode::G) {
                 show_gui = !show_gui;
             }
 

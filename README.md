@@ -113,7 +113,7 @@ cargo run --bin view --release -- --scene battle --width 1920 --height 1080 --no
 * Ctrl - move slower
 * Space - switch to reference path tracing
 * Backspace - reset view to previous saved state
-* Tab - show/hide the UI
+* G - show/hide the UI
 
 ### Resolution scaling
 
