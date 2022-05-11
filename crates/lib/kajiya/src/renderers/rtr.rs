@@ -8,6 +8,8 @@ use kajiya_backend::{
 };
 use kajiya_rg::{self as rg, SimpleRenderPass};
 
+use crate::hit_groups::new_rt_with_default_hit_groups;
+
 use super::{
     ircache::IrcacheRenderState, wrc::WrcRenderState, GbufferDepth, PingPongTemporalResource,
 };
@@ -124,14 +126,14 @@ impl RtrRenderer {
             vk_sync::AccessType::ComputeShaderReadSampledImageOrUniformTexelBuffer,
         );
 
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("reflection trace"),
             ShaderSource::hlsl("/shaders/rtr/reflection.rgen.hlsl"),
             [
                 ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+            true
         )
         .read(&gbuffer_depth.gbuffer)
         .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)
@@ -198,14 +200,14 @@ impl RtrRenderer {
                         .format(vk::Format::R16G16B16A16_SFLOAT),
                 );
 
-            SimpleRenderPass::new_rt(
+            new_rt_with_default_hit_groups(
                 rg.add_pass("reflection validate"),
                 ShaderSource::hlsl("/shaders/rtr/reflection_validate.rgen.hlsl"),
                 [
                     ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                     ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
                 ],
-                [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+                true
             )
             .read(&gbuffer_depth.gbuffer)
             .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)

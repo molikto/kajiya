@@ -226,14 +226,14 @@ impl CsgiRenderer {
                 VOLUME_DIMS,
             ]);
 
-            SimpleRenderPass::new_rt(
+            new_rt_with_default_hit_groups(
                 rg.add_pass("csgi trace"),
                 ShaderSource::hlsl("/shaders/csgi/trace_volume.rgen.hlsl"),
                 [
                     ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                     ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
                 ],
-                [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+                true
             )
             .read_array(&indirect_combined_cascades)
             .read(sky_cube)

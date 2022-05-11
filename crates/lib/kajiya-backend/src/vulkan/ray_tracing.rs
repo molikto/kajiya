@@ -36,6 +36,7 @@ pub struct RayTracingInstanceDesc {
     pub blas: Arc<RayTracingAcceleration>,
     pub transformation: Affine3A,
     pub mesh_index: u32,
+    pub sbt_offset: u32
 }
 
 #[derive(Clone)]
@@ -495,7 +496,7 @@ impl Device {
                 transform,
                 desc.mesh_index, /* instance id */
                 0xff,
-                0,
+                desc.sbt_offset,
                 /*ash::vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE
                 | */
                 ash::vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE,

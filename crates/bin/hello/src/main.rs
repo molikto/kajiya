@@ -40,6 +40,7 @@ fn main() -> anyhow::Result<()> {
             camera_matrices: camera.through(&lens),
             render_extent: ctx.render_extent,
             sun_direction: Vec3::new(4.0, 1.0, 1.0).normalize(),
+            use_rt_raster: false,
         }
     })
 }

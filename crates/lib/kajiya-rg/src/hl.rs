@@ -161,22 +161,6 @@ impl<'rg> SimpleRenderPass<'rg, RgComputePipelineHandle> {
 
 impl<'rg> SimpleRenderPass<'rg, RgRtPipelineHandle> {
     pub fn new_rt(
-        pass: PassBuilder<'rg>,
-        rgen: ShaderSource,
-        miss: impl IntoIterator<Item = ShaderSource>,
-        hit: impl IntoIterator<Item = ShaderSource>,
-    ) -> Self {
-        Self::new_rt_1(
-            pass,
-            rgen,
-            miss,
-            hit.into_iter().map(|h| HitGroupShaderSources {
-                closest_hit: Some(h),
-                intersection: None,
-            }),
-        )
-    }
-    pub fn new_rt_1(
         mut pass: PassBuilder<'rg>,
         rgen: ShaderSource,
         miss: impl IntoIterator<Item = ShaderSource>,

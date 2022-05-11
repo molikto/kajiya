@@ -5,6 +5,8 @@ use kajiya_backend::{
 use kajiya_rg::{self as rg, SimpleRenderPass};
 use rg::BindToSimpleRenderPass;
 
+use crate::hit_groups::new_rt_with_default_hit_groups;
+
 use super::ircache::IrcacheRenderState;
 
 // Must match `wrc_settings.hlsl`
@@ -43,14 +45,14 @@ pub fn wrc_trace(
         ],
     ));
 
-    SimpleRenderPass::new_rt(
+    new_rt_with_default_hit_groups(
         rg.add_pass("wrc trace"),
         ShaderSource::hlsl("/shaders/wrc/trace_wrc.rgen.hlsl"),
         [
             ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
             ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
         ],
-        [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+        true
     )
     .read(sky_cube)
     .bind_mut(ircache)
@@ -77,14 +79,14 @@ impl WrcRenderState {
         tlas: &rg::Handle<RayTracingAcceleration>,
         output_img: &mut rg::Handle<Image>,
     ) {
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("wrc see through"),
             ShaderSource::hlsl("/shaders/wrc/wrc_see_through.rgen.hlsl"),
             [
                 ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+            true
         )
         .bind(self)
         .read(sky_cube)

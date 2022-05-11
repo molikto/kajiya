@@ -4,8 +4,8 @@ use crate::{
         deferred::light_gbuffer,
         motion_blur::motion_blur,
         raster_meshes::*,
-        rt_raster_meshes::{rt_raster_meshes, RasterMeshesRtData},
         reference::reference_path_trace,
+        rt_raster_meshes::{rt_raster_meshes, RasterMeshesRtData},
         shadows::trace_sun_shadow_mask,
         GbufferDepth,
     },
@@ -46,7 +46,7 @@ impl WorldRenderer {
                 frame_desc.render_extent,
             ));
 
-            let gbuffer_depth: GbufferDepth =  if frame_desc.use_rt_raster {
+            let gbuffer_depth: GbufferDepth = if frame_desc.use_rt_raster {
                 let mut gbuffer_depth = {
                     // TODO(molikto): cannot use packed texture?
                     let normal = rg.create(ImageDesc::new_2d(
@@ -179,12 +179,6 @@ impl WorldRenderer {
                 .into()
         };
 
-        // TODO: don't iter over all the things
-        let any_triangle_lights = self
-            .instances
-            .iter()
-            .any(|inst| !self.mesh_lights[inst.mesh.0].lights.is_empty());
-
         let mut rtr = if let Some(tlas) = tlas.as_ref() {
             self.rtr.trace(
                 rg,
@@ -201,17 +195,15 @@ impl WorldRenderer {
             self.rtr.create_dummy_output(rg, &gbuffer_depth)
         };
 
-        if any_triangle_lights {
-            if let Some(tlas) = tlas.as_ref() {
-                // Render specular lighting into the RTR image so they can be jointly filtered
-                self.lighting.render_specular(
-                    &mut rtr.resolved_tex,
-                    rg,
-                    &gbuffer_depth,
-                    self.bindless_descriptor_set,
-                    tlas,
-                );
-            }
+        if let Some(tlas) = tlas.as_ref() {
+            // Render specular lighting into the RTR image so they can be jointly filtered
+            self.lighting.render_specular(
+                &mut rtr.resolved_tex,
+                rg,
+                &gbuffer_depth,
+                self.bindless_descriptor_set,
+                tlas,
+            );
         }
 
         let rtr = rtr.filter_temporal(rg, &gbuffer_depth, &reprojection_map);

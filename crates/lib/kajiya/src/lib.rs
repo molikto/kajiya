@@ -7,6 +7,7 @@ pub mod logging;
 pub mod lut_renderers;
 pub mod math;
 pub mod mmap;
+pub mod hit_groups;
 pub mod renderers;
 pub mod ui_renderer;
 pub mod world_render_passes;

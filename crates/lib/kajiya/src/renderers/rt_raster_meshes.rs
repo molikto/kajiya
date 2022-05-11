@@ -3,14 +3,14 @@ use kajiya_backend::{
     vulkan::{image::*, ray_tracing::RayTracingAcceleration, shader::*},
 };
 use kajiya_rg::{self as rg};
-use rg::{Handle, RenderGraph, SimpleRenderPass};
+use rg::{Handle, RenderGraph};
 
-use crate::world_renderer::MeshInstance;
+use crate::{world_renderer::BlasInstance, hit_groups::new_rt_with_default_hit_groups};
 
 use super::GbufferDepth;
 
 pub struct RasterMeshesRtData<'a> {
-    pub instances: &'a [MeshInstance],
+    pub instances: &'a [BlasInstance],
     pub bindless_descriptor_set: vk::DescriptorSet,
 }
 
@@ -28,13 +28,13 @@ pub fn rt_raster_meshes(
 ) {
     let instances = mesh_data.instances;
 
-    SimpleRenderPass::new_rt(
+    new_rt_with_default_hit_groups(
         rg.add_pass("raster rt"),
         ShaderSource::hlsl("/shaders/rt/rt_raster.rgen.hlsl"),
         [
             ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
         ],
-        [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+        true
     )
     .write(geometric_normal)
     .write(gbuffer)

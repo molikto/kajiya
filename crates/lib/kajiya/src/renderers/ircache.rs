@@ -21,7 +21,7 @@ use rg::{BindMutToSimpleRenderPass, BindRgRef, IntoRenderPassPipelineBinding};
 use rust_shaders_shared::frame_constants::{IrcacheCascadeConstants, IRCACHE_CASCADE_COUNT};
 use vk::BufferUsageFlags;
 
-use crate::renderers::prefix_scan::inclusive_prefix_scan_u32_1m;
+use crate::{renderers::prefix_scan::inclusive_prefix_scan_u32_1m, hit_groups::new_rt_with_default_hit_groups};
 
 use super::{wrc::WrcRenderState, GbufferDepth};
 
@@ -386,7 +386,7 @@ impl IrcacheRenderState {
         .read(&self.ircache_entry_indirection_buf)
         .dispatch_indirect(&indirect_args_buf, 16 * 2);
 
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("ircache trace access"),
             ShaderSource::hlsl("/shaders/ircache/trace_accessibility.rgen.hlsl"),
             [
@@ -394,7 +394,7 @@ impl IrcacheRenderState {
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            std::iter::empty(),
+            false,
         )
         .read(&self.ircache_spatial_buf)
         .read(&self.ircache_life_buf)
@@ -404,14 +404,15 @@ impl IrcacheRenderState {
         .read(&self.ircache_entry_indirection_buf)
         .trace_rays_indirect(tlas, &indirect_args_buf, 16 * 1);
 
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("ircache validate"),
             ShaderSource::hlsl("/shaders/ircache/ircache_validate.rgen.hlsl"),
             [
                 ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+            true
+            ,
         )
         .read(&self.ircache_spatial_buf)
         .read(sky_cube)
@@ -428,14 +429,14 @@ impl IrcacheRenderState {
         .raw_descriptor_set(1, bindless_descriptor_set)
         .trace_rays_indirect(tlas, &indirect_args_buf, 16 * 3);
 
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("ircache trace"),
             ShaderSource::hlsl("/shaders/ircache/trace_irradiance.rgen.hlsl"),
             [
                 ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+            true
         )
         .read(&self.ircache_spatial_buf)
         .read(sky_cube)

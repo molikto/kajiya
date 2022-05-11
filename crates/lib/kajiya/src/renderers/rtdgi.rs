@@ -4,6 +4,8 @@ use kajiya_backend::{
 };
 use kajiya_rg::{self as rg, SimpleRenderPass};
 
+use crate::hit_groups::new_rt_with_default_hit_groups;
+
 use super::{
     ircache::IrcacheRenderState, wrc::WrcRenderState, GbufferDepth, PingPongTemporalResource,
 };
@@ -259,14 +261,14 @@ impl RtdgiRenderer {
             let mut rt_history_validity_pre_input_tex =
                 rg.create(gbuffer_desc.half_res().format(vk::Format::R8_UNORM));
 
-            SimpleRenderPass::new_rt(
+            new_rt_with_default_hit_groups(
                 rg.add_pass("rtdgi validate"),
                 ShaderSource::hlsl("/shaders/rtdgi/diffuse_validate.rgen.hlsl"),
                 [
                     ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                     ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
                 ],
-                [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+                true
             )
             .read(&*half_view_normal_tex)
             .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)
@@ -286,14 +288,14 @@ impl RtdgiRenderer {
             let mut rt_history_validity_input_tex =
                 rg.create(gbuffer_desc.half_res().format(vk::Format::R8_UNORM));
 
-            SimpleRenderPass::new_rt(
+            new_rt_with_default_hit_groups(
                 rg.add_pass("rtdgi trace"),
                 ShaderSource::hlsl("/shaders/rtdgi/trace_diffuse.rgen.hlsl"),
                 [
                     ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                     ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
                 ],
-                [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+                true
             )
             .read(&*half_view_normal_tex)
             .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)

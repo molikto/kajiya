@@ -8,7 +8,7 @@ use kajiya_backend::{
 use kajiya_rg::{self as rg};
 use rg::{IntoRenderPassPipelineBinding, RenderGraph, RenderPassBinding};
 
-use crate::world_renderer::MeshInstance;
+use crate::world_renderer::{BlasInstance, BlasHandle};
 
 use super::GbufferDepth;
 
@@ -20,7 +20,7 @@ pub struct UploadedTriMesh {
 
 pub struct RasterMeshesData<'a> {
     pub meshes: &'a [UploadedTriMesh],
-    pub instances: &'a [MeshInstance],
+    pub instances: &'a [BlasInstance],
     pub vertex_buffer: Arc<Buffer>,
     pub bindless_descriptor_set: vk::DescriptorSet,
 }
@@ -54,7 +54,7 @@ pub fn raster_meshes(
     );
 
     let meshes: Vec<UploadedTriMesh> = mesh_data.meshes.to_vec();
-    let instances: Vec<MeshInstance> = mesh_data.instances.to_vec();
+    let instances: Vec<BlasInstance> = mesh_data.instances.to_vec();
 
     let depth_ref = pass.raster(
         &mut gbuffer_depth.depth,
@@ -146,28 +146,30 @@ pub fn raster_meshes(
             let cb = api.cb;
 
             for (draw_idx, instance) in instances.into_iter().enumerate() {
-                let mesh = &meshes[instance.mesh.0];
+                if let BlasHandle::Mesh(mesh_handle) = instance.mesh {
+                    let mesh = &meshes[mesh_handle.0];
 
-                raw_device.cmd_bind_index_buffer(
-                    cb.raw,
-                    vertex_buffer.raw,
-                    mesh.index_buffer_offset,
-                    vk::IndexType::UINT32,
-                );
+                    raw_device.cmd_bind_index_buffer(
+                        cb.raw,
+                        vertex_buffer.raw,
+                        mesh.index_buffer_offset,
+                        vk::IndexType::UINT32,
+                    );
 
-                let push_constants = (draw_idx as u32, instance.mesh.0 as u32);
+                    let push_constants = (draw_idx as u32, mesh_handle.0 as u32);
 
-                pipeline.push_constants(
-                    cb.raw,
-                    vk::ShaderStageFlags::ALL_GRAPHICS,
-                    0,
-                    std::slice::from_raw_parts(
-                        &push_constants as *const _ as *const u8,
-                        std::mem::size_of_val(&push_constants),
-                    ),
-                );
+                    pipeline.push_constants(
+                        cb.raw,
+                        vk::ShaderStageFlags::ALL_GRAPHICS,
+                        0,
+                        std::slice::from_raw_parts(
+                            &push_constants as *const _ as *const u8,
+                            std::mem::size_of_val(&push_constants),
+                        ),
+                    );
 
-                raw_device.cmd_draw_indexed(cb.raw, mesh.index_count, 1, 0, 0, 0);
+                    raw_device.cmd_draw_indexed(cb.raw, mesh.index_count, 1, 0, 0, 0);
+                }
             }
         }
 

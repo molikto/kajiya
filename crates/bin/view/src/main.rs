@@ -239,15 +239,16 @@ fn main() -> anyhow::Result<()> {
         ));
     }
 
-    let car_mesh = kajiya
-        .world_renderer
-        .add_baked_mesh("/baked/336_lrm.mesh", AddMeshOptions::default())?;
-    let mut car_pos = Vec3::Y * -0.01;
-    let car_rot = 0.0f32;
-    let car_inst = kajiya.world_renderer.add_instance(
-        car_mesh,
-        Affine3A::from_rotation_translation(Quat::IDENTITY, car_pos),
-    );
+    // let car_mesh = kajiya
+    //     .world_renderer
+    //     .add_baked_mesh("/baked/336_lrm.mesh", AddMeshOptions::default())?;
+    // let mut car_pos = Vec3::Y * -0.01;
+    // let car_rot = 0.0f32;
+    // let car_inst = kajiya.world_renderer.add_instance(
+    //     car_mesh,
+    //     Affine3A::from_rotation_translation(Quat::IDENTITY, car_pos),
+    // );
+    kajiya.world_renderer.add_default_aabb_mesh();
 
     let mut state = persisted_app_state
         .clone()
@@ -348,14 +349,14 @@ fn main() -> anyhow::Result<()> {
                 .translate(move_vec * ctx.dt_filtered * state.camera_speed);
             camera.update(ctx.dt_filtered);
 
-            if keyboard.is_down(VirtualKeyCode::Z) {
-                car_pos.x += mouse.delta.x / 100.0;
-            }
-            //car_rot += 0.5 * ctx.dt;
-            ctx.world_renderer.set_instance_transform(
-                car_inst,
-                Affine3A::from_rotation_translation(Quat::from_rotation_y(car_rot), car_pos),
-            );
+            // if keyboard.is_down(VirtualKeyCode::Z) {
+            //     // car_pos.x += mouse.delta.x / 100.0;
+            // }
+            // //car_rot += 0.5 * ctx.dt;
+            // ctx.world_renderer.set_instance_transform(
+            //     car_inst,
+            //     Affine3A::from_rotation_translation(Quat::from_rotation_y(car_rot), car_pos),
+            // );
 
             if keyboard.was_just_pressed(VirtualKeyCode::Space) {
                 match ctx.world_renderer.render_mode {

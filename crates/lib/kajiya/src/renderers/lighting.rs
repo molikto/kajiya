@@ -4,6 +4,8 @@ use kajiya_backend::{
 };
 use kajiya_rg::{self as rg, SimpleRenderPass};
 
+use crate::hit_groups::new_rt_with_default_hit_groups;
+
 use super::{rtr::SPATIAL_RESOLVE_OFFSETS, GbufferDepth};
 
 pub struct LightingRenderer {}
@@ -46,14 +48,14 @@ impl LightingRenderer {
 
         let mut refl2_tex = rg.create(refl0_tex.desc().format(vk::Format::R8G8B8A8_SNORM));
 
-        SimpleRenderPass::new_rt(
+        new_rt_with_default_hit_groups(
             rg.add_pass("sample lights"),
             ShaderSource::hlsl("/shaders/lighting/sample_lights.rgen.hlsl"),
             [
                 ShaderSource::hlsl("/shaders/rt/gbuffer.rmiss.hlsl"),
                 ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ],
-            [ShaderSource::hlsl("/shaders/rt/gbuffer.rchit.hlsl")],
+            true
         )
         .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)
         .write(&mut refl0_tex)

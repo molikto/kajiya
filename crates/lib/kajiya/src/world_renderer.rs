@@ -15,7 +15,7 @@ use crate::{
 use glam::{Affine3A, Vec2, Vec3};
 use kajiya_asset::mesh::{AssetRef, GpuImage, MeshMaterialFlags, PackedTriMesh, PackedVertex};
 use kajiya_backend::{
-    ash::vk::{self, ImageView},
+    ash::vk::{self, AabbPositionsKHR, ImageView},
     dynamic_constants::DynamicConstants,
     vk_sync::{self, AccessType},
     vulkan::{self, device, image::*, ray_tracing::*, shader::*, RenderBackend},
@@ -31,7 +31,7 @@ use rust_shaders_shared::{
     frame_constants::{FrameConstants, IrcacheCascadeConstants, IRCACHE_CASCADE_COUNT},
     view_constants::ViewConstants,
 };
-use std::{collections::HashMap, mem::size_of, sync::Arc};
+use std::{collections::HashMap, iter, mem::size_of, sync::Arc};
 use vulkan::buffer::{Buffer, BufferDesc};
 
 #[cfg(feature = "dlss")]
@@ -54,6 +54,9 @@ struct GpuMesh {
 pub struct MeshHandle(pub usize);
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+pub struct AabbHandle(pub usize);
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
 pub struct InstanceHandle(pub usize);
 
 const MAX_GPU_MESHES: usize = 1024;
@@ -73,11 +76,29 @@ impl Default for InstanceDynamicParameters {
     }
 }
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Debug)]
+pub enum BlasHandle {
+    Mesh(MeshHandle),
+    Aabb(AabbHandle),
+}
+
+impl Into<BlasHandle> for MeshHandle {
+    fn into(self) -> BlasHandle {
+        BlasHandle::Mesh(self)
+    }
+}
+
+impl Into<BlasHandle> for AabbHandle {
+    fn into(self) -> BlasHandle {
+        BlasHandle::Aabb(self)
+    }
+}
+
 #[derive(Clone, Copy)]
-pub struct MeshInstance {
+pub struct BlasInstance {
     pub transformation: Affine3A,
     pub prev_transformation: Affine3A,
-    pub mesh: MeshHandle,
+    pub mesh: BlasHandle,
     pub dynamic_parameters: InstanceDynamicParameters,
 }
 
@@ -133,7 +154,7 @@ pub struct WorldRenderer {
 
     // ----
     // SoA
-    pub(super) instances: Vec<MeshInstance>,
+    pub(super) instances: Vec<BlasInstance>,
     pub(super) instance_handles: Vec<InstanceHandle>,
     // ----
 
@@ -146,6 +167,7 @@ pub struct WorldRenderer {
     mesh_buffer: Mutex<Arc<Buffer>>,
 
     mesh_blas: Vec<Arc<RayTracingAcceleration>>,
+    aabb_blas: Vec<Arc<RayTracingAcceleration>>,
     tlas: Option<Arc<RayTracingAcceleration>>,
     accel_scratch: RayTracingAccelerationScratchBuffer,
 
@@ -424,6 +446,7 @@ impl WorldRenderer {
             mesh_lights: Default::default(),
 
             mesh_blas: Default::default(),
+            aabb_blas: Default::default(),
             tlas: Default::default(),
             accel_scratch,
 
@@ -561,6 +584,53 @@ impl WorldRenderer {
         )[handle.0 as usize] = image_size;
 
         handle
+    }
+
+    pub fn add_default_aabb_mesh(&mut self) {
+        let instances = vec![AabbPositionsKHR {
+            min_x: -1.0,
+            min_y: -1.0,
+            min_z: -1.0,
+            max_x: 1.0,
+            max_y: 1.0,
+            max_z: 1.0,
+        }];
+        let instances = unsafe {
+            std::slice::from_raw_parts(
+                instances.as_ptr() as *const u8,
+                size_of::<AabbPositionsKHR>() as usize,
+            )
+        };
+
+        let buffer = self
+            .device
+            .create_buffer(
+                BufferDesc::new_gpu_only(
+                    32,
+                    vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                ),
+                "",
+                Some(instances),
+            )
+            .unwrap();
+
+        let blas = self
+            .device
+            .create_ray_tracing_aabb_bottom_acceleration(
+                &RayTracingAabbBottomAccelerationDesc {
+                    geometries: vec![RayTracingAabbGeometryDesc {
+                        buffer: buffer.device_address(&self.device),
+                        stride: size_of::<AabbPositionsKHR>() as u64,
+                        primitive_count: 1,
+                    }],
+                },
+                &mut self.accel_scratch,
+            )
+            .unwrap();
+        let blas = Arc::new(blas);
+        let mesh_idx = self.aabb_blas.len();
+        self.aabb_blas.push(blas.clone());
+        self.add_instance(AabbHandle(mesh_idx), Affine3A::IDENTITY);
     }
 
     pub fn add_mesh(
@@ -739,17 +809,21 @@ impl WorldRenderer {
         MeshHandle(mesh_idx)
     }
 
-    pub fn add_instance(&mut self, mesh: MeshHandle, transform: Affine3A) -> InstanceHandle {
+    pub fn add_instance<T: Into<BlasHandle>>(
+        &mut self,
+        mesh: T,
+        transform: Affine3A,
+    ) -> InstanceHandle {
         let handle = self.next_instance_handle;
         self.next_instance_handle += 1;
         let handle = InstanceHandle(handle);
 
         let index = self.instances.len();
 
-        self.instances.push(MeshInstance {
+        self.instances.push(BlasInstance {
             transformation: transform,
             prev_transformation: transform,
-            mesh,
+            mesh: mesh.into(),
             dynamic_parameters: InstanceDynamicParameters::default(),
         });
         self.instance_handles.push(handle);
@@ -797,21 +871,32 @@ impl WorldRenderer {
         &mut self.instances[index].dynamic_parameters
     }
 
+    fn get_instance_desc(&self) -> Vec<RayTracingInstanceDesc> {
+        self.instances
+            .iter()
+            .map(|inst| match inst.mesh {
+                BlasHandle::Mesh(mesh) => RayTracingInstanceDesc {
+                    blas: self.mesh_blas[mesh.0].clone(),
+                    transformation: inst.transformation,
+                    mesh_index: mesh.0 as u32,
+                    sbt_offset: 0,
+                },
+                BlasHandle::Aabb(aabb) => RayTracingInstanceDesc {
+                    blas: self.aabb_blas[aabb.0].clone(),
+                    transformation: inst.transformation,
+                    mesh_index: 0,
+                    sbt_offset: 1,
+                },
+            })
+            .collect()
+    }
+
     pub(crate) fn build_ray_tracing_top_level_acceleration(&mut self) {
         let tlas = self
             .device
             .create_ray_tracing_top_acceleration(
                 &RayTracingTopAccelerationDesc {
-                    //instances: self.mesh_blas.iter().collect::<Vec<_>>(),
-                    instances: self
-                        .instances
-                        .iter()
-                        .map(|inst| RayTracingInstanceDesc {
-                            blas: self.mesh_blas[inst.mesh.0].clone(),
-                            transformation: inst.transformation,
-                            mesh_index: inst.mesh.0 as u32,
-                        })
-                        .collect::<Vec<_>>(),
+                    instances: self.get_instance_desc(),
                     preallocate_bytes: TLAS_PREALLOCATE_BYTES,
                 },
                 &self.accel_scratch,
@@ -835,15 +920,7 @@ impl WorldRenderer {
             vk_sync::AccessType::AnyShaderReadOther,
         );
 
-        let instances = self
-            .instances
-            .iter()
-            .map(|inst| RayTracingInstanceDesc {
-                blas: self.mesh_blas[inst.mesh.0].clone(),
-                transformation: inst.transformation,
-                mesh_index: inst.mesh.0 as u32,
-            })
-            .collect::<Vec<_>>();
+        let instances = self.get_instance_desc();
 
         let mut pass = rg.add_pass("rebuild tlas");
         let tlas_ref = pass.write(&mut tlas, AccessType::TransferWrite);
@@ -1003,14 +1080,19 @@ impl WorldRenderer {
 
                 let emissive_multiplier = Vec3::splat(inst.dynamic_parameters.emissive_multiplier);
 
-                self.mesh_lights[inst.mesh.0]
-                    .lights
-                    .iter()
-                    .map(move |light: &TriangleLight| {
-                        light
-                            .transform(inst_position, inst_rotation)
-                            .scale_radiance(emissive_multiplier)
-                    })
+                if let BlasHandle::Mesh(mesh) = inst.mesh {
+                    self.mesh_lights[mesh.0]
+                        .lights
+                        .iter()
+                        .map(move |light: &TriangleLight| {
+                            light
+                                .transform(inst_position, inst_rotation)
+                                .scale_radiance(emissive_multiplier)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                }
             })
             .collect();
 

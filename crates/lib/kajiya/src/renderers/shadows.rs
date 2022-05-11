@@ -3,7 +3,9 @@ use kajiya_backend::{
     vulkan::{image::*, ray_tracing::RayTracingAcceleration, shader::ShaderSource},
 };
 use kajiya_rg::{self as rg};
-use rg::{RenderGraph, SimpleRenderPass};
+use rg::{RenderGraph};
+
+use crate::hit_groups::new_rt_with_default_hit_groups;
 
 use super::GbufferDepth;
 
@@ -15,7 +17,7 @@ pub fn trace_sun_shadow_mask(
 ) -> rg::Handle<Image> {
     let mut output_img = rg.create(gbuffer_depth.depth.desc().format(vk::Format::R8_UNORM));
 
-    SimpleRenderPass::new_rt(
+    new_rt_with_default_hit_groups(
         rg.add_pass("trace shadow mask"),
         ShaderSource::hlsl("/shaders/rt/trace_sun_shadow_mask.rgen.hlsl"),
         [
@@ -23,7 +25,7 @@ pub fn trace_sun_shadow_mask(
             ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
             ShaderSource::hlsl("/shaders/rt/shadow.rmiss.hlsl"),
         ],
-        std::iter::empty(),
+        false
     )
     .read_aspect(&gbuffer_depth.depth, vk::ImageAspectFlags::DEPTH)
     .read(&gbuffer_depth.geometric_normal)
