@@ -345,6 +345,11 @@ impl ShaderSource {
     }
 }
 
+pub struct HitGroupShaderSources {
+    pub closest_hit: Option<ShaderSource>,
+    pub intersection: Option<ShaderSource>
+}
+
 #[derive(Builder, Clone)]
 #[builder(pattern = "owned", derive(Clone))]
 pub struct ComputePipelineDesc {
@@ -474,19 +479,9 @@ pub fn create_compute_pipeline(
     }
 }
 
-#[derive(Copy, Clone, Hash, Eq, PartialEq, Debug)]
-pub enum ShaderPipelineStage {
-    Vertex,
-    Pixel,
-    RayGen,
-    RayMiss,
-    RayClosestHit,
-}
-
 #[derive(Builder, Hash, PartialEq, Eq, Clone, Debug)]
 #[builder(pattern = "owned")]
 pub struct PipelineShaderDesc {
-    pub stage: ShaderPipelineStage,
     #[builder(setter(strip_option), default)]
     pub descriptor_set_layout_flags: Option<Vec<(usize, vk::DescriptorSetLayoutCreateFlags)>>,
     #[builder(default)]
@@ -497,8 +492,8 @@ pub struct PipelineShaderDesc {
 }
 
 impl PipelineShaderDesc {
-    pub fn builder(stage: ShaderPipelineStage) -> PipelineShaderDescBuilder {
-        PipelineShaderDescBuilder::default().stage(stage)
+    pub fn builder() -> PipelineShaderDescBuilder {
+        PipelineShaderDescBuilder::default()
     }
 }
 
@@ -515,6 +510,26 @@ impl PipelineShaderDescBuilder {
         self
     }
 }
+
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub struct RasterPipelineShadersDesc {
+    pub vertex: PipelineShaderDesc,
+    pub pixel: PipelineShaderDesc,
+}
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub enum ShaderGroupDesc {
+    RayGen(PipelineShaderDesc),
+    Miss(PipelineShaderDesc),
+    HitGroup {
+        closest_hit: Option<PipelineShaderDesc>,
+        intersection: Option<PipelineShaderDesc>,
+    },
+}
+
+#[derive(Hash, PartialEq, Eq, Clone, Debug)]
+pub struct RayTracingPipelineShadersDesc(pub Vec<ShaderGroupDesc>);
 
 #[derive(Builder, Clone)]
 #[builder(pattern = "owned", derive(Clone))]
@@ -798,6 +813,21 @@ pub struct PipelineShader<ShaderCode> {
     pub desc: PipelineShaderDesc,
 }
 
+#[derive(Hash, PartialEq, Eq)]
+pub enum PipelineShaderGroup<ShaderCode> {
+    RayGen(PipelineShader<ShaderCode>),
+    Miss(PipelineShader<ShaderCode>),
+    HitGroup { 
+        cloest_hit: Option<PipelineShader<ShaderCode>>,
+        intersection: Option<PipelineShader<ShaderCode>>
+    }
+}
+
+pub struct RasterPipelineShaders<ShaderCode> {
+    pub pixel: PipelineShader<ShaderCode>,
+    pub vertex: PipelineShader<ShaderCode>
+}
+
 impl<ShaderCode> Clone for PipelineShader<ShaderCode>
 where
     ShaderCode: Clone,
@@ -822,9 +852,11 @@ impl<ShaderCode> PipelineShader<ShaderCode> {
 
 pub fn create_raster_pipeline(
     device: &Device,
-    shaders: &[PipelineShader<Bytes>],
+    shaders: &RasterPipelineShaders<Bytes>,
     desc: &RasterPipelineDesc,
 ) -> anyhow::Result<RasterPipeline> {
+    let shaders = vec![&shaders.vertex, &shaders.pixel];
+    let shader_stage_flags = vec![vk::ShaderStageFlags::VERTEX, vk::ShaderStageFlags::FRAGMENT];
     let stage_layouts = shaders
         .iter()
         .map(|shader| {
@@ -866,7 +898,8 @@ pub fn create_raster_pipeline(
         let entry_names = TempList::new();
         let shader_stage_create_infos: Vec<_> = shaders
             .iter()
-            .map(|desc| {
+            .enumerate()
+            .map(|(idx, desc)| {
                 let shader_info = vk::ShaderModuleCreateInfo::builder()
                     .code(desc.code.as_slice_of::<u32>().unwrap());
 
@@ -875,12 +908,7 @@ pub fn create_raster_pipeline(
                     .create_shader_module(&shader_info, None)
                     .expect("Shader module error");
 
-                let stage = match desc.desc.stage {
-                    ShaderPipelineStage::Vertex => vk::ShaderStageFlags::VERTEX,
-                    ShaderPipelineStage::Pixel => vk::ShaderStageFlags::FRAGMENT,
-                    _ => unimplemented!(),
-                };
-
+                let stage =  shader_stage_flags[idx];
                 vk::PipelineShaderStageCreateInfo::builder()
                     .module(shader_module)
                     .name(entry_names.add(CString::new(desc.desc.entry.as_str()).unwrap()))

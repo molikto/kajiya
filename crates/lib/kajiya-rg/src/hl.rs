@@ -5,7 +5,10 @@ use kajiya_backend::{
     vulkan::{
         image::*,
         ray_tracing::{RayTracingAcceleration, RayTracingPipelineDesc},
-        shader::{ComputePipelineDesc, PipelineShaderDesc, ShaderPipelineStage, ShaderSource},
+        shader::{
+            ComputePipelineDesc, HitGroupShaderSources, PipelineShaderDesc, ShaderGroupDesc,
+            ShaderSource,
+        },
     },
 };
 
@@ -158,42 +161,63 @@ impl<'rg> SimpleRenderPass<'rg, RgComputePipelineHandle> {
 
 impl<'rg> SimpleRenderPass<'rg, RgRtPipelineHandle> {
     pub fn new_rt(
-        mut pass: PassBuilder<'rg>,
+        pass: PassBuilder<'rg>,
         rgen: ShaderSource,
         miss: impl IntoIterator<Item = ShaderSource>,
         hit: impl IntoIterator<Item = ShaderSource>,
     ) -> Self {
+        Self::new_rt_1(
+            pass,
+            rgen,
+            miss,
+            hit.into_iter().map(|h| HitGroupShaderSources {
+                closest_hit: Some(h),
+                intersection: None,
+            }),
+        )
+    }
+    pub fn new_rt_1(
+        mut pass: PassBuilder<'rg>,
+        rgen: ShaderSource,
+        miss: impl IntoIterator<Item = ShaderSource>,
+        hit: impl IntoIterator<Item = HitGroupShaderSources>,
+    ) -> Self {
         let miss = miss.into_iter();
         let hit = hit.into_iter();
 
-        let mut shaders = Vec::with_capacity(1 + miss.size_hint().0 + hit.size_hint().0);
+        let mut shader_groups = Vec::with_capacity(1 + miss.size_hint().0 + hit.size_hint().0);
 
-        shaders.push(
-            PipelineShaderDesc::builder(ShaderPipelineStage::RayGen)
-                .source(rgen)
-                .build()
-                .unwrap(),
-        );
+        shader_groups.push(ShaderGroupDesc::RayGen(
+            PipelineShaderDesc::builder().source(rgen).build().unwrap(),
+        ));
         for source in miss {
-            shaders.push(
-                PipelineShaderDesc::builder(ShaderPipelineStage::RayMiss)
+            shader_groups.push(ShaderGroupDesc::Miss(
+                PipelineShaderDesc::builder()
                     .source(source)
                     .build()
                     .unwrap(),
-            );
+            ));
         }
 
-        for source in hit {
-            shaders.push(
-                PipelineShaderDesc::builder(ShaderPipelineStage::RayClosestHit)
-                    .source(source)
-                    .build()
-                    .unwrap(),
-            );
+        for group in hit {
+            shader_groups.push(ShaderGroupDesc::HitGroup {
+                closest_hit: group.closest_hit.map(|shader| {
+                    PipelineShaderDesc::builder()
+                        .source(shader)
+                        .build()
+                        .unwrap()
+                }),
+                intersection: group.intersection.map(|shader| {
+                    PipelineShaderDesc::builder()
+                        .source(shader)
+                        .build()
+                        .unwrap()
+                }),
+            });
         }
 
         let pipeline = pass.register_ray_tracing_pipeline(
-            &shaders,
+            &shader_groups,
             RayTracingPipelineDesc::default().max_pipeline_ray_recursion_depth(1),
         );
 

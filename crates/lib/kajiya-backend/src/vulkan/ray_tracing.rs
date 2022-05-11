@@ -5,8 +5,8 @@ use crate::{dynamic_constants::DynamicConstants, BackendError, MAX_DESCRIPTOR_SE
 use super::{
     device::Device,
     shader::{
-        merge_shader_stage_layouts, DescriptorSetLayoutOpts, PipelineShader, ShaderPipelineCommon,
-        ShaderPipelineStage,
+        merge_shader_stage_layouts, DescriptorSetLayoutOpts, PipelineShader, PipelineShaderGroup,
+        ShaderPipelineCommon,
     },
 };
 use ash::vk;
@@ -53,7 +53,7 @@ pub struct RayTracingTriangleBottomAccelerationDesc {
 pub struct RayTracingAabbGeometryDesc {
     pub buffer: vk::DeviceAddress,
     pub stride: vk::DeviceSize,
-    pub primitive_count: u32
+    pub primitive_count: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -764,39 +764,19 @@ impl RayTracingPipelineDesc {
 
 pub fn create_ray_tracing_pipeline(
     device: &Device,
-    shaders: &[PipelineShader<Bytes>],
+    shaders: &[PipelineShaderGroup<Bytes>],
     desc: &RayTracingPipelineDesc,
 ) -> anyhow::Result<RayTracingPipeline> {
-    let stage_layouts = shaders
-        .iter()
-        .map(|desc| {
-            rspirv_reflect::Reflection::new_from_spirv(&desc.code)
-                .unwrap_or_else(|err| panic!("Failed compiling shader {:?}:\n{:?}", desc.desc, err))
-                .get_descriptor_sets()
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-
-    //log::info!("{:#?}", stage_layouts);
-
-    let (descriptor_set_layouts, set_layout_info) = super::shader::create_descriptor_set_layouts(
-        device,
-        &merge_shader_stage_layouts(stage_layouts),
-        vk::ShaderStageFlags::ALL,
-        //desc.descriptor_set_layout_flags.unwrap_or(&[]),  // TODO: merge flags
-        &desc.descriptor_set_opts,
-    );
+    let mut stage_layouts = Vec::new();
+    let mut push_stage_layouts = |desc: &PipelineShader<Bytes>| {
+        let reflected = rspirv_reflect::Reflection::new_from_spirv(&desc.code)
+            .unwrap_or_else(|err| panic!("Failed compiling shader {:?}:\n{:?}", desc.desc, err))
+            .get_descriptor_sets()
+            .unwrap();
+        stage_layouts.push(reflected);
+    };
 
     unsafe {
-        let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
-            .set_layouts(&descriptor_set_layouts)
-            .build();
-
-        let pipeline_layout = device
-            .raw
-            .create_pipeline_layout(&layout_create_info, None)
-            .unwrap();
-
         let mut shader_groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR> = Vec::new();
         let mut shader_stages: Vec<vk::PipelineShaderStageCreateInfo> = Vec::new();
 
@@ -820,16 +800,11 @@ pub fn create_ray_tracing_pipeline(
                 (shader_module, desc.desc.entry.clone())
             };
 
-        let mut prev_stage: Option<ShaderPipelineStage> = None;
-
         for desc in shaders {
-            let group_idx = shader_stages.len();
-
-            match desc.desc.stage {
-                ShaderPipelineStage::RayGen => {
-                    assert!(prev_stage == None || prev_stage == Some(ShaderPipelineStage::RayGen));
+            match desc {
+                PipelineShaderGroup::RayGen(desc) => {
                     raygen_entry_count += 1;
-
+                    push_stage_layouts(desc);
                     let (module, entry_point) = create_shader_module(desc);
 
                     entry_points.push(std::ffi::CString::new(entry_point).unwrap());
@@ -843,7 +818,7 @@ pub fn create_ray_tracing_pipeline(
 
                     let group = ash::vk::RayTracingShaderGroupCreateInfoKHR::builder()
                         .ty(ash::vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                        .general_shader(group_idx as _)
+                        .general_shader(shader_stages.len() as _)
                         .closest_hit_shader(ash::vk::SHADER_UNUSED_KHR)
                         .any_hit_shader(ash::vk::SHADER_UNUSED_KHR)
                         .intersection_shader(ash::vk::SHADER_UNUSED_KHR)
@@ -852,12 +827,9 @@ pub fn create_ray_tracing_pipeline(
                     shader_stages.push(stage);
                     shader_groups.push(group);
                 }
-                ShaderPipelineStage::RayMiss => {
-                    assert!(
-                        prev_stage == Some(ShaderPipelineStage::RayGen)
-                            || prev_stage == Some(ShaderPipelineStage::RayMiss)
-                    );
+                PipelineShaderGroup::Miss(desc) => {
                     miss_entry_count += 1;
+                    push_stage_layouts(desc);
 
                     let (module, entry_point) = create_shader_module(desc);
 
@@ -872,7 +844,7 @@ pub fn create_ray_tracing_pipeline(
 
                     let group = ash::vk::RayTracingShaderGroupCreateInfoKHR::builder()
                         .ty(ash::vk::RayTracingShaderGroupTypeKHR::GENERAL)
-                        .general_shader(group_idx as _)
+                        .general_shader(shader_stages.len() as _)
                         .closest_hit_shader(ash::vk::SHADER_UNUSED_KHR)
                         .any_hit_shader(ash::vk::SHADER_UNUSED_KHR)
                         .intersection_shader(ash::vk::SHADER_UNUSED_KHR)
@@ -881,44 +853,78 @@ pub fn create_ray_tracing_pipeline(
                     shader_stages.push(stage);
                     shader_groups.push(group);
                 }
-                ShaderPipelineStage::RayClosestHit => {
-                    assert!(
-                        prev_stage == Some(ShaderPipelineStage::RayMiss)
-                            || prev_stage == Some(ShaderPipelineStage::RayClosestHit)
-                    );
+                PipelineShaderGroup::HitGroup {
+                    cloest_hit,
+                    intersection,
+                } => {
                     hit_entry_count += 1;
+                    let mut cloest_hit_shader = ash::vk::SHADER_UNUSED_KHR;
+                    let mut intersection_shader = ash::vk::SHADER_UNUSED_KHR;
+                    let mut ty = ash::vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP;
+                    for desc in cloest_hit {
+                        push_stage_layouts(desc);
+                        let (module, entry_point) = create_shader_module(desc);
 
-                    let (module, entry_point) = create_shader_module(desc);
+                        entry_points.push(std::ffi::CString::new(entry_point).unwrap());
+                        let entry_point = &**entry_points.last().unwrap();
 
-                    entry_points.push(std::ffi::CString::new(entry_point).unwrap());
-                    let entry_point = &**entry_points.last().unwrap();
+                        let stage = ash::vk::PipelineShaderStageCreateInfo::builder()
+                            .stage(ash::vk::ShaderStageFlags::CLOSEST_HIT_KHR)
+                            .module(module)
+                            .name(entry_point)
+                            .build();
+                        cloest_hit_shader = shader_stages.len() as _;
+                        shader_stages.push(stage);
+                    }
+                    for desc in intersection {
+                        push_stage_layouts(desc);
+                        let (module, entry_point) = create_shader_module(desc);
 
-                    let stage = ash::vk::PipelineShaderStageCreateInfo::builder()
-                        .stage(ash::vk::ShaderStageFlags::CLOSEST_HIT_KHR)
-                        .module(module)
-                        .name(entry_point)
-                        .build();
+                        entry_points.push(std::ffi::CString::new(entry_point).unwrap());
+                        let entry_point = &**entry_points.last().unwrap();
+
+                        let stage = ash::vk::PipelineShaderStageCreateInfo::builder()
+                            .stage(ash::vk::ShaderStageFlags::INTERSECTION_KHR)
+                            .module(module)
+                            .name(entry_point)
+                            .build();
+                        intersection_shader = shader_stages.len() as _;
+                        ty = ash::vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP;
+                        shader_stages.push(stage);
+                    }
 
                     let group = ash::vk::RayTracingShaderGroupCreateInfoKHR::builder()
-                        .ty(ash::vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
+                        .ty(ty)
                         .general_shader(ash::vk::SHADER_UNUSED_KHR)
-                        .closest_hit_shader(group_idx as _)
+                        .closest_hit_shader(cloest_hit_shader)
                         .any_hit_shader(ash::vk::SHADER_UNUSED_KHR)
-                        .intersection_shader(ash::vk::SHADER_UNUSED_KHR)
+                        .intersection_shader(intersection_shader)
                         .build();
-
-                    shader_stages.push(stage);
                     shader_groups.push(group);
                 }
-                _ => unimplemented!(),
             }
-
-            prev_stage = Some(desc.desc.stage);
         }
 
         assert!(raygen_entry_count > 0);
         assert!(miss_entry_count > 0);
 
+        //log::info!("{:#?}", stage_layouts);
+        let (descriptor_set_layouts, set_layout_info) =
+            super::shader::create_descriptor_set_layouts(
+                device,
+                &merge_shader_stage_layouts(stage_layouts),
+                vk::ShaderStageFlags::ALL,
+                //desc.descriptor_set_layout_flags.unwrap_or(&[]),  // TODO: merge flags
+                &desc.descriptor_set_opts,
+            );
+        let layout_create_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_set_layouts)
+            .build();
+
+        let pipeline_layout = device
+            .raw
+            .create_pipeline_layout(&layout_create_info, None)
+            .unwrap();
         let pipeline = device
             .ray_tracing_pipeline_ext
             .create_ray_tracing_pipelines(

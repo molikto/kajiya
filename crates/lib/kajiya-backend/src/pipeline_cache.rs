@@ -6,6 +6,7 @@ use crate::{
         shader::*,
     },
 };
+use bytes::Bytes;
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
 use std::{collections::HashMap, sync::Arc};
@@ -26,64 +27,82 @@ pub struct RasterPipelineHandle(usize);
 #[derive(Clone, Copy, Hash, Eq, PartialEq)]
 pub struct RtPipelineHandle(usize);
 
-pub struct CompiledPipelineShaders {
-    shaders: Vec<PipelineShader<Arc<CompiledShader>>>,
+async fn compile(
+    desc: PipelineShaderDesc,
+    profile: &'static str,
+    ctx: &RunContext,
+) -> anyhow::Result<PipelineShader<Bytes>> {
+    let compiled: Arc<CompiledShader> = match &desc.source {
+        ShaderSource::Rust { entry } => CompileRustShader {
+            entry: entry.clone(),
+        }
+        .into_lazy()
+        .eval(ctx),
+        ShaderSource::Hlsl { path } => CompileShader {
+            path: path.clone(),
+            profile: profile.to_string(),
+        }
+        .into_lazy()
+        .eval(ctx),
+    }
+    .await?;
+    Ok(PipelineShader {
+        desc,
+        code: compiled.spirv.clone(),
+    })
 }
+#[async_trait]
+impl LazyWorker for RasterPipelineShadersDesc {
+    type Output = anyhow::Result<RasterPipelineShaders<Bytes>>;
 
-#[derive(Clone, Hash)]
-pub struct CompilePipelineShaders {
-    shader_descs: Vec<PipelineShaderDesc>,
+    async fn run(self, ctx: RunContext) -> Self::Output {
+        let vertex = compile(self.vertex, "vs", &ctx).await?;
+        let pixel = compile(self.pixel, "ps", &ctx).await?;
+        Ok(RasterPipelineShaders { vertex, pixel })
+    }
 }
 
 #[async_trait]
-impl LazyWorker for CompilePipelineShaders {
-    type Output = anyhow::Result<CompiledPipelineShaders>;
+impl LazyWorker for RayTracingPipelineShadersDesc {
+    type Output = anyhow::Result<Vec<PipelineShaderGroup<Bytes>>>;
 
     async fn run(self, ctx: RunContext) -> Self::Output {
-        let shaders = futures::future::try_join_all(self.shader_descs.iter().map(|desc| {
-            match &desc.source {
-                ShaderSource::Rust { entry } => CompileRustShader {
-                    entry: entry.clone(),
+        let mut groups = Vec::new();
+        for g in self.0 {
+            match g {
+                ShaderGroupDesc::RayGen(g) => {
+                    groups.push(PipelineShaderGroup::RayGen(compile(g, "lib", &ctx).await?));
                 }
-                .into_lazy()
-                .eval(&ctx),
-                ShaderSource::Hlsl { path } => CompileShader {
-                    path: path.clone(),
-                    profile: match desc.stage {
-                        ShaderPipelineStage::Vertex => "vs".to_owned(),
-                        ShaderPipelineStage::Pixel => "ps".to_owned(),
-                        ShaderPipelineStage::RayGen
-                        | ShaderPipelineStage::RayMiss
-                        | ShaderPipelineStage::RayClosestHit => "lib".to_owned(),
+                ShaderGroupDesc::Miss(g) => {
+                    groups.push(PipelineShaderGroup::Miss(compile(g, "lib", &ctx).await?));
+                }
+                ShaderGroupDesc::HitGroup {
+                    closest_hit,
+                    intersection,
+                } => groups.push(PipelineShaderGroup::HitGroup {
+                    cloest_hit: match closest_hit {
+                        Some(g) => Some(compile(g, "lib", &ctx).await?),
+                        None => None,
                     },
-                }
-                .into_lazy()
-                .eval(&ctx),
+                    intersection: match intersection {
+                        Some(g) => Some(compile(g, "lib", &ctx).await?),
+                        None => None,
+                    },
+                }),
             }
-        }))
-        .await?;
-
-        let shaders = shaders
-            .into_iter()
-            .zip(self.shader_descs.iter())
-            .map(|(shader, desc)| PipelineShader {
-                code: shader,
-                desc: desc.clone(),
-            })
-            .collect();
-
-        Ok(CompiledPipelineShaders { shaders })
+        }
+        Ok(groups)
     }
 }
 
 struct RasterPipelineCacheEntry {
-    lazy_handle: Lazy<CompiledPipelineShaders>,
+    lazy_handle: Lazy<RasterPipelineShaders<Bytes>>,
     desc: RasterPipelineDesc,
     pipeline: Option<Arc<RasterPipeline>>,
 }
 
 struct RtPipelineCacheEntry {
-    lazy_handle: Lazy<CompiledPipelineShaders>,
+    lazy_handle: Lazy<Vec<PipelineShaderGroup<Bytes>>>,
     desc: RayTracingPipelineDesc,
     pipeline: Option<Arc<RayTracingPipeline>>,
 }
@@ -96,8 +115,8 @@ pub struct PipelineCache {
     rt_entries: HashMap<RtPipelineHandle, RtPipelineCacheEntry>,
 
     compute_shader_to_handle: HashMap<ShaderSource, ComputePipelineHandle>,
-    raster_shaders_to_handle: HashMap<Vec<PipelineShaderDesc>, RasterPipelineHandle>,
-    rt_shaders_to_handle: HashMap<Vec<PipelineShaderDesc>, RtPipelineHandle>,
+    raster_shaders_to_handle: HashMap<RasterPipelineShadersDesc, RasterPipelineHandle>,
+    rt_shaders_to_handle: HashMap<Vec<ShaderGroupDesc>, RtPipelineHandle>,
 }
 
 impl PipelineCache {
@@ -159,7 +178,7 @@ impl PipelineCache {
 
     pub fn register_raster(
         &mut self,
-        shaders: &[PipelineShaderDesc],
+        shaders: &RasterPipelineShadersDesc,
         desc: &RasterPipelineDesc,
     ) -> RasterPipelineHandle {
         if let Some(handle) = self.raster_shaders_to_handle.get(shaders) {
@@ -172,10 +191,7 @@ impl PipelineCache {
         self.raster_entries.insert(
             handle,
             RasterPipelineCacheEntry {
-                lazy_handle: CompilePipelineShaders {
-                    shader_descs: shaders.to_vec(),
-                }
-                .into_lazy(),
+                lazy_handle: shaders.clone().into_lazy(),
                 desc: desc.clone(),
                 pipeline: None,
             },
@@ -194,7 +210,7 @@ impl PipelineCache {
 
     pub fn register_ray_tracing(
         &mut self,
-        shaders: &[PipelineShaderDesc],
+        shaders: &Vec<ShaderGroupDesc>,
         desc: &RayTracingPipelineDesc,
     ) -> RtPipelineHandle {
         if let Some(handle) = self.rt_shaders_to_handle.get(shaders) {
@@ -206,10 +222,7 @@ impl PipelineCache {
         self.rt_entries.insert(
             handle,
             RtPipelineCacheEntry {
-                lazy_handle: CompilePipelineShaders {
-                    shader_descs: shaders.to_vec(),
-                }
-                .into_lazy(),
+                lazy_handle: RayTracingPipelineShadersDesc(shaders.to_vec()).into_lazy(),
                 desc: desc.clone(),
                 pipeline: None,
             },
@@ -258,8 +271,10 @@ impl PipelineCache {
             entry.pipeline.is_none().then(|| {
                 let task = entry.lazy_handle.eval(&self.lazy_cache);
                 smol::spawn(async move {
-                    task.await
-                        .map(|compiled| CompileTaskOutput::Compute { handle, compiled })
+                    task.await.map(|compiled| CompileTaskOutput::Compute {
+                        handle,
+                        compiled: compiled.spirv.clone(),
+                    })
                 })
             })
         });
@@ -300,73 +315,34 @@ impl PipelineCache {
                     CompileTaskOutput::Compute { handle, compiled } => {
                         let entry = self.compute_entries.get_mut(&handle).unwrap();
                         log::trace!(
-                            "Creating compute pipeline {:?}:{:?}",
-                            compiled.name,
+                            "Creating compute pipeline {:?}",
                             entry.desc.source.entry(),
                         );
                         entry.pipeline = Some(Arc::new(create_compute_pipeline(
                             &*device,
-                            &compiled.spirv,
+                            &compiled,
                             &entry.desc,
                         )));
                     }
                     CompileTaskOutput::Raster { handle, compiled } => {
                         let entry = self.raster_entries.get_mut(&handle).unwrap();
                         log::trace!(
-                            "Creating raster pipeline {}",
-                            compiled
-                                .shaders
-                                .iter()
-                                .map(|shader| format!(
-                                    "{:?}:{:?}",
-                                    shader.desc.stage, shader.desc.entry
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            "Creating raster pipeline",
                         );
-
-                        let compiled_shaders = compiled
-                            .shaders
-                            .iter()
-                            .map(|shader| PipelineShader {
-                                code: shader.code.spirv.clone(),
-                                desc: shader.desc.clone(),
-                            })
-                            .collect::<Vec<_>>();
-
                         // TODO: defer and handle the error
                         entry.pipeline = Some(Arc::new(
-                            create_raster_pipeline(&*device, &compiled_shaders, &entry.desc)
+                            create_raster_pipeline(&*device, &compiled, &entry.desc)
                                 .expect("create_raster_pipeline"),
                         ));
                     }
                     CompileTaskOutput::Rt { handle, compiled } => {
                         let entry = self.rt_entries.get_mut(&handle).unwrap();
                         log::trace!(
-                            "Creating rt pipeline {}",
-                            compiled
-                                .shaders
-                                .iter()
-                                .map(|shader| format!(
-                                    "{} {:?}:{:?}",
-                                    shader.code.name, shader.desc.stage, shader.desc.entry
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            "Creating rt pipeline",
                         );
-
-                        let compiled_shaders = compiled
-                            .shaders
-                            .iter()
-                            .map(|shader| PipelineShader {
-                                code: shader.code.spirv.clone(),
-                                desc: shader.desc.clone(),
-                            })
-                            .collect::<Vec<_>>();
-
                         // TODO: defer and handle the error
                         entry.pipeline = Some(Arc::new(
-                            create_ray_tracing_pipeline(&*device, &compiled_shaders, &entry.desc)
+                            create_ray_tracing_pipeline(&*device, &compiled, &entry.desc)
                                 .expect("create_ray_tracing_pipeline"),
                         ));
                     }
@@ -391,14 +367,14 @@ impl PipelineCache {
 enum CompileTaskOutput {
     Compute {
         handle: ComputePipelineHandle,
-        compiled: Arc<CompiledShader>,
+        compiled: Bytes,
     },
     Raster {
         handle: RasterPipelineHandle,
-        compiled: Arc<CompiledPipelineShaders>,
+        compiled: Arc<RasterPipelineShaders<Bytes>>,
     },
     Rt {
         handle: RtPipelineHandle,
-        compiled: Arc<CompiledPipelineShaders>,
+        compiled: Arc<Vec<PipelineShaderGroup<Bytes>>>,
     },
 }

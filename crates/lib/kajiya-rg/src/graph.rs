@@ -19,7 +19,7 @@ use kajiya_backend::{
     dynamic_constants::DynamicConstants,
     gpu_profiler,
     pipeline_cache::{
-        ComputePipelineHandle, PipelineCache, RasterPipelineHandle, RtPipelineHandle,
+        ComputePipelineHandle, PipelineCache, RasterPipelineHandle, RtPipelineHandle
     },
     rspirv_reflect,
     transient_resource_cache::TransientResourceCache,
@@ -33,7 +33,7 @@ use kajiya_backend::{
         image::ImageViewDesc,
         profiler::VkProfilerData,
         ray_tracing::{RayTracingAcceleration, RayTracingPipelineDesc},
-        shader::{ComputePipelineDesc, PipelineShader, PipelineShaderDesc, RasterPipelineDesc},
+        shader::{ComputePipelineDesc, PipelineShader, PipelineShaderDesc, RasterPipelineDesc, RasterPipelineShadersDesc, ShaderGroupDesc},
     },
 };
 use parking_lot::Mutex;
@@ -103,8 +103,8 @@ pub struct RgRasterPipelineHandle {
 }
 
 pub(crate) struct RgRasterPipeline {
-    pub(crate) shaders: Vec<PipelineShaderDesc>,
     pub(crate) desc: RasterPipelineDesc,
+    pub(crate) shaders: RasterPipelineShadersDesc
 }
 
 #[derive(Clone, Copy)]
@@ -113,7 +113,7 @@ pub struct RgRtPipelineHandle {
 }
 
 pub(crate) struct RgRtPipeline {
-    pub(crate) shaders: Vec<PipelineShaderDesc>,
+    pub(crate) shaders: Vec<ShaderGroupDesc>,
     pub(crate) desc: RayTracingPipelineDesc,
 }
 

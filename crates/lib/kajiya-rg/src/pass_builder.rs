@@ -11,7 +11,7 @@ use super::{
 
 use kajiya_backend::{
     vk_sync::{self, AccessType},
-    vulkan::{ray_tracing::RayTracingPipelineDesc, shader::*},
+    vulkan::{ray_tracing::RayTracingPipelineDesc, shader::*}
 };
 use std::{marker::PhantomData, path::Path};
 
@@ -235,7 +235,7 @@ impl<'rg> PassBuilder<'rg> {
 
     pub fn register_raster_pipeline(
         &mut self,
-        shaders: &[PipelineShaderDesc],
+        shaders: RasterPipelineShadersDesc,
         desc: RasterPipelineDescBuilder,
     ) -> RgRasterPipelineHandle {
         let id = self.rg.raster_pipelines.len();
@@ -252,7 +252,7 @@ impl<'rg> PassBuilder<'rg> {
         }
 
         self.rg.raster_pipelines.push(RgRasterPipeline {
-            shaders: shaders.to_vec(),
+            shaders,
             desc,
         });
 
@@ -261,7 +261,7 @@ impl<'rg> PassBuilder<'rg> {
 
     pub fn register_ray_tracing_pipeline(
         &mut self,
-        shaders: &[PipelineShaderDesc],
+        shaders: &[ShaderGroupDesc],
         mut desc: RayTracingPipelineDesc,
     ) -> RgRtPipelineHandle {
         let id = self.rg.rt_pipelines.len();

@@ -10,8 +10,8 @@ use kajiya_backend::{
         image::*,
         ray_tracing::RayTracingAcceleration,
         shader::{
-            create_render_pass, PipelineShaderDesc, RasterPipelineDesc, RenderPass,
-            RenderPassAttachmentDesc, RenderPassDesc, ShaderPipelineStage, ShaderSource,
+            create_render_pass, PipelineShaderDesc, RasterPipelineDesc, RasterPipelineShadersDesc,
+            RenderPass, RenderPassAttachmentDesc, RenderPassDesc, ShaderSource,
         },
     },
     Device,
@@ -473,16 +473,16 @@ impl IrcacheRenderState {
         let mut pass = rg.add_pass("raster ircache origins");
 
         let pipeline = pass.register_raster_pipeline(
-            &[
-                PipelineShaderDesc::builder(ShaderPipelineStage::Vertex)
+            RasterPipelineShadersDesc {
+                vertex: PipelineShaderDesc::builder()
                     .hlsl_source("/shaders/ircache/raster_origins_vs.hlsl")
                     .build()
                     .unwrap(),
-                PipelineShaderDesc::builder(ShaderPipelineStage::Pixel)
+                pixel: PipelineShaderDesc::builder()
                     .hlsl_source("/shaders/ircache/raster_origins_ps.hlsl")
                     .build()
                     .unwrap(),
-            ],
+            },
             RasterPipelineDesc::builder()
                 .render_pass(render_pass.clone())
                 .face_cull(true)

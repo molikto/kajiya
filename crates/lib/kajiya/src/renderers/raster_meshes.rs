@@ -35,18 +35,18 @@ pub fn raster_meshes(
     let mut pass = rg.add_pass("raster simple");
 
     let pipeline = pass.register_raster_pipeline(
-        &[
-            PipelineShaderDesc::builder(ShaderPipelineStage::Vertex)
+        RasterPipelineShadersDesc {
+            vertex: PipelineShaderDesc::builder()
                 // .rust_source("raster_simple::raster_simple_vs")
                 .hlsl_source("/shaders/raster_simple_vs.hlsl")
                 .build()
                 .unwrap(),
-            PipelineShaderDesc::builder(ShaderPipelineStage::Pixel)
+            pixel: PipelineShaderDesc::builder()
                 // .rust_source("raster_simple::raster_simple_fs")
                 .hlsl_source("/shaders/raster_simple_ps.hlsl")
                 .build()
                 .unwrap(),
-        ],
+        },
         RasterPipelineDesc::builder()
             .render_pass(render_pass.clone())
             .face_cull(false)
